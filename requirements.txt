@@ -1,0 +1,12 @@
+pandas
+numpy
+torch
+tqdm
+transformers
+accelerate
+bitsandbytes
+huggingface_hub
+scikit-learn
+matplotlib
+gymnasium
+stable-baselines3[extra]
