@@ -22,6 +22,7 @@ bash llm_configs/generate_llama3.sh
 bash llm_configs/generate_deepseek.sh
 bash llm_configs/generate_none.sh
 ```
+You can also run the generator manually, e.g. `python factor_mining/generate_dataset_llm.py --model gemma`.
 
 2. Train the DAgger agent:
 ```bash
