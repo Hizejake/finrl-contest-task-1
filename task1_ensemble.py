@@ -1,91 +1,90 @@
-"""DAgger agent and expert definitions used for Task 1."""
+"""Expert policies and DAgger agent from the Kaggle notebook."""
 
 from __future__ import annotations
 
-import os
+from collections import Counter
 from typing import Optional
 
 import numpy as np
 import torch
-from stable_baselines3 import PPO
+import torch.nn as nn
+from stable_baselines3 import DQN, PPO, A2C
 from stable_baselines3.common.vec_env import DummyVecEnv
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+
+
+class MixedEnsembleExpert:
+    """Ensemble of DQN, PPO and A2C experts."""
+
+    def __init__(self) -> None:
+        self.models: dict[str, any] = {}
+        self.trained = False
+
+    def create_mixed_ensemble(self, env, seed: Optional[int] = None) -> None:
+        print("Creating mixed RL ensemble (DQN + PPO + A2C) with LSTM Policies...")
+        policy_type = "MlpPolicy"
+        self.models["DQN"] = DQN(policy_type, env, verbose=0, learning_rate=0.0001, buffer_size=50000, seed=seed)
+        self.models["PPO"] = PPO(policy_type, env, verbose=0, learning_rate=0.0003, n_steps=2048, seed=seed)
+        self.models["A2C"] = A2C(policy_type, env, verbose=0, learning_rate=0.0007, n_steps=5, seed=seed)
+
+    def train_mixed_ensemble(self, timesteps: int = 60000) -> None:
+        print("Training mixed ensemble...")
+        steps_per_model = timesteps // len(self.models)
+        for name, model in self.models.items():
+            print(f"Training {name} ({steps_per_model} timesteps)...")
+            model.learn(total_timesteps=steps_per_model)
+        self.trained = True
+        print("✅ Mixed ensemble training completed!")
+
+    def get_ensemble_action(self, state: np.ndarray) -> int:
+        if not self.trained:
+            return int(np.random.choice([0, 1, 2]))
+        votes = [int(model.predict(state, deterministic=True)[0]) for model in self.models.values()]
+        return Counter(votes).most_common(1)[0][0]
+
+    def get_ensemble_confidence(self, state: np.ndarray) -> float:
+        if not self.trained:
+            return 0.33
+        votes = [int(model.predict(state, deterministic=True)[0]) for model in self.models.values()]
+        return Counter(votes).most_common(1)[0][1] / len(votes)
 
 
 class LLMExpert:
-    """Expert policy that consults an instruction-tuned LLM."""
+    """Simple rule-based expert using sentiment and risk scores."""
 
-    MODEL_MAP = {
-        "gemma": "google/gemma-1.1-2b-it",
-        "llama3": "meta-llama/Meta-Llama-3-8B-Instruct",
-        "deepseek": "deepseek-ai/deepseek-llm-7b-instruct",
-    }
-
-    def __init__(self, model_key: str):
-        if model_key not in self.MODEL_MAP:
-            raise ValueError(f"Unknown model {model_key}")
-        tokenizer = AutoTokenizer.from_pretrained(self.MODEL_MAP[model_key])
-        model = AutoModelForCausalLM.from_pretrained(
-            self.MODEL_MAP[model_key],
-            device_map="auto",
-            torch_dtype=torch.float16,
-            load_in_4bit=True,
-        )
-        self.pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-
-    def predict(self, observation: np.ndarray) -> int:
-        prompt = (
-            "Given the following market observation, return an action among \"hold\"",
-            ", \"buy\" or \"sell\". Only output the word.\nObservation:\n"
-        ) + str(observation.tolist()) + "\nAction:"
-        out = self.pipe(prompt, max_new_tokens=1)[0]["generated_text"]
-        result = out.split(prompt)[-1].strip().lower()
-        if "buy" in result:
+    def get_llm_action(self, sentiment_score: float, risk_score: float) -> int:
+        if sentiment_score >= 4 and risk_score <= 2:
             return 1
-        if "sell" in result:
+        if sentiment_score <= 2 or risk_score >= 4:
             return 2
         return 0
 
 
-class MixedEnsembleExpert:
-    """Combines heuristics with an LLM expert."""
+class DAggerAgent(nn.Module):
+    """Neural network policy used by DAgger."""
 
-    def __init__(self, llm_model: Optional[str] = None):
-        self.llm = None if llm_model is None else LLMExpert(llm_model)
+    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 512):
+        super().__init__()
+        self.network = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(hidden_dim // 2, action_dim),
+            nn.Softmax(dim=-1),
+        )
 
-    def predict(self, observation: np.ndarray) -> int:
-        ma_short = observation[-1, 3]  # close price
-        ma_long = observation[:, 3].mean()
-        rule_action = 1 if ma_short > ma_long else 2
-        if self.llm is None:
-            return rule_action
-        llm_action = self.llm.predict(observation)
-        return llm_action if np.random.rand() < 0.5 else rule_action
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
+        return self.network(x)
 
-
-class DAggerAgent:
-    """Simplified DAgger trainer around a PPO policy."""
-
-    def __init__(self, env, expert: MixedEnsembleExpert, iterations: int = 5, timesteps: int = 2000):
-        self.env = DummyVecEnv([lambda: env])
-        self.expert = expert
-        self.iterations = iterations
-        self.timesteps = timesteps
-        self.model = PPO("MlpPolicy", self.env, verbose=0)
-
-    def train(self):
-        for _ in range(self.iterations):
-            obs = self.env.reset()
-            done = False
-            while not done:
-                action, _ = self.model.predict(obs, deterministic=False)
-                expert_action = self.expert.predict(obs[0])
-                obs, _, done, _ = self.env.step([expert_action])
-            self.model.learn(total_timesteps=self.timesteps)
-
-    def save(self, path: str):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        self.model.save(path)
-
-    def load(self, path: str):
-        self.model = PPO.load(path, env=self.env)
+    def get_action(self, state: np.ndarray, deterministic: bool = True) -> int:
+        with torch.no_grad():
+            state_tensor = torch.FloatTensor(state).unsqueeze(0)
+            action_probs = self.forward(state_tensor).numpy()[0]
+            if deterministic:
+                return int(np.argmax(action_probs))
+            return int(np.random.choice(len(action_probs), p=action_probs))

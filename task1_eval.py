@@ -1,61 +1,63 @@
-"""Evaluation utilities for trained agents."""
+"""Evaluation helpers extracted from the Kaggle notebook."""
 
-import os
-from typing import Dict, List
+from collections import Counter
+from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import pandas as pd
 
 from trade_simulator import CryptoTradingEnv
-from task1_ensemble import DAggerAgent, MixedEnsembleExpert
+from task1_ensemble import DAggerAgent, MixedEnsembleExpert, LLMExpert
 
 
-def evaluate_agent(model_path: str, dataset: pd.DataFrame) -> List[float]:
-    env = CryptoTradingEnv(dataset)
-    expert = MixedEnsembleExpert()
-    agent = DAggerAgent(env, expert)
-    agent.load(model_path)
-
+def evaluate_agent(agent: DAggerAgent, env: CryptoTradingEnv) -> Tuple[float, List[float], List[int]]:
+    """Run the trained agent on the environment and report ROI."""
+    print("\nEvaluating trained agent...")
     obs, _ = env.reset()
+    actions_taken: List[int] = []
     done = False
-    values = []
     while not done:
-        action, _ = agent.model.predict(obs, deterministic=True)
-        obs, _, done, _, info = env.step(int(action))
-        values.append(info["portfolio_value"])
-    return values
+        action = agent.get_action(obs, deterministic=True)
+        actions_taken.append(int(action))
+        obs, _, done, _, _ = env.step(int(action))
+
+    final_portfolio = env.net_worth_history[-1]
+    roi = (final_portfolio - env.initial_balance) / env.initial_balance * 100
+
+    print(f"  Final Portfolio Value: ${final_portfolio:.2f}")
+    print(f"  Return on Investment (ROI): {roi:.2f}%")
+    print(
+        f"  Actions - Hold: {actions_taken.count(0)}, Buy: {actions_taken.count(1)}, Sell: {actions_taken.count(2)}"
+    )
+
+    return roi, env.net_worth_history, actions_taken
 
 
-def visualize_results(results: Dict[str, List[float]], btc_prices: List[float]):
-    plt.figure(figsize=(10, 5))
-    for name, vals in results.items():
-        plt.plot(vals, label=name)
-    plt.plot(btc_prices[: len(vals)], label="BTC", linestyle="--")
-    plt.legend()
-    plt.xlabel("Step")
-    plt.ylabel("Portfolio Value")
-    plt.title("Agent Performance")
-    plt.tight_layout()
-    plt.savefig("comparison.png")
-    plt.close()
+def visualize_results(portfolio_history: List[float], actions_taken: List[int], training_losses: List[float]) -> None:
+    """Plot evaluation results and training loss."""
+    print("\n--- \U0001F4CA Generating Visualizations ---")
+    fig, axes = plt.subplots(1, 3, figsize=(22, 6))
+    fig.suptitle("DAgger Agent Performance and Training Summary", fontsize=16)
 
+    axes[0].plot(portfolio_history, color="g", lw=2)
+    axes[0].set_title("Portfolio Value During Evaluation")
+    axes[0].set_xlabel("Time Steps")
+    axes[0].set_ylabel("Portfolio Value ($)")
+    axes[0].grid(True)
 
-def main():
-    btc = pd.read_csv("BTC_1min.csv")
-    btc_prices = btc["close"].tolist()
+    action_counts = Counter(actions_taken)
+    action_labels = ["Hold", "Buy", "Sell"]
+    sizes = [action_counts.get(i, 0) for i in range(3)]
+    colors = ["#ff9999", "#66b3ff", "#99ff99"]
+    axes[1].pie(sizes, labels=action_labels, autopct="%1.1f%%", startangle=90, colors=colors)
+    axes[1].set_title("Action Distribution in Evaluation")
+    axes[1].axis("equal")
 
-    results = {}
-    for model in ["gemma", "llama3", "deepseek", "none"]:
-        dataset = pd.read_csv(os.path.join("datasets", f"dataset_{model}.csv"))
-        model_path = os.path.join("trained_models", f"dagger_{model}.zip")
-        if not os.path.exists(model_path):
-            continue
-        pv = evaluate_agent(model_path, dataset)
-        results[model] = pv
-        pd.DataFrame({"portfolio": pv}).to_csv(f"results_{model}.csv", index=False)
+    axes[2].plot(training_losses, marker="o", linestyle="--", color="r")
+    axes[2].set_title("DAgger Training Loss per Iteration")
+    axes[2].set_xlabel("DAgger Iteration")
+    axes[2].set_ylabel("Cross-Entropy Loss")
+    axes[2].grid(True)
 
-    visualize_results(results, btc_prices)
-
-
-if __name__ == "__main__":
-    main()
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.show()
