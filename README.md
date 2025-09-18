@@ -10,7 +10,9 @@ This repository packages a reproducible research workflow for Task I of the FinA
 - **Advanced Financial Metrics:** Comprehensive evaluation reporting ROI, annualized Sharpe ratio, maximum drawdown, and trade statistics with comparative plots.
 
 ## Repository Structure
-- **`data/`** – Storage for raw Kaggle datasets and generated merged datasets (one per LLM configuration).
+
+- **`data/`** – Storage for raw contest datasets (LOB ticks, news sentiment) and generated merged datasets (one per LLM configuration).
+
 - **`models/`** – Checkpoints produced by the DAgger agent training routine.
 - **`src/`** – Modular Python package housing configuration, preprocessing, agent definitions, training, and evaluation scripts.
 - **`notebooks/`** – Jupyter notebooks for exploratory analysis and visualization of experiment outputs.
@@ -22,7 +24,9 @@ This repository packages a reproducible research workflow for Task I of the FinA
    cd finrl-contest-task-1
    ```
 2. **Download datasets**
-   Retrieve `news_train.csv` and `BTC_1sec.csv` from the FinAI Contest 2025 Kaggle competition page and place both files inside the `data/` directory.
+
+   Manually obtain `news_train.csv` and `BTC_1sec.csv` from the official contest distribution. You may download the LOB file directly from Google Drive (`https://drive.google.com/file/d/1toXRwp4IbrIZ8PnILQVFuHy9aqlZUKJ8/view?usp=drive_link`). After downloading, copy both files into the `data/` directory.
+
 3. **Create a virtual environment**
    ```bash
    python -m venv .venv
